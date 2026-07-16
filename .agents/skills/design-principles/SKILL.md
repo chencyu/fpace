@@ -6,45 +6,16 @@ user-invocable: false
 
 # Design Principles
 
-Structural decisions come before implementation. Get the shape right; the logic follows.
+Choose structure and interfaces before logic.
 
 ## Single Source of Truth
 
-Every fact, semantic, contract, and contextual rationale in the system must have exactly one authoritative location. Other locations are derivations, references, or cached views — never independent originals. "Truth" here is broader than data values:
+Each data value, meaning, contract, and rationale has one authoritative home; every other occurrence is generated, referenced, or cached. Unify differently written copies of one fact, but keep identical text separate when the concepts evolve independently. Generate derivable representations; handwritten copies drift.
 
-- **Data** — a value's authoritative record
-- **Semantics** — where a concept's meaning is defined
-- **Contract** — where an interface's promise lives
-- **Context** — where a decision's rationale is recorded
+## Shape Before Processing
 
-This principle is the conceptual root of several others in this skill and in *skill: code-craft-principles*. They are not restatements of it — each carries its own concrete trigger — but they share this generative core: when something has more than one authoritative home, the homes drift, and the system loses a stable reference for what is true.
+Choose data structures before algorithms: put behavior where its data lives and seek a representation that removes traversal complexity or branches. For research, shape the taxonomy or schema before analysis. Define components and communication before implementation so intent is expressed once by the architecture, not reinvented by each function.
 
-Gotcha: DRY's substance is SSOT, not literal duplication. Two snippets that look identical but encode independently-evolving concepts should stay separate; two snippets that look different but encode the same fact must be unified.
+## Cost
 
-Gotcha: Hand-written copies of a derivable representation are drift seeds. If a binding, client, document, or constant table can be generated from the source, generate it — the source is the truth, the copy is a lie waiting to happen.
-
-## Architecture-Driven (over Logic-Driven)
-
-Define components and their interfaces before writing logic. The structure is the authoritative expression of the system's intent; logic written first invents that intent piecemeal in each function. (See *Single Source of Truth*.)
-
-Gotcha: Don't start implementing functions/steps until you know what the top-level components are and how they communicate. Logic written before structure becomes load-bearing spaghetti.
-
-## Data Structures Over Algorithms
-
-The right representation eliminates the need for complex processing. Invest more time in how data is shaped than in how it's traversed. A well-chosen data structure is also the authoritative source for the operations around it: when unsure where a behavior should live, ask where its data lives. (See *Single Source of Truth*.)
-
-Gotcha: Before writing an algorithm, ask: is there a representation where this problem becomes trivial? A lookup table, adjacency list, or sorted index often replaces an O(n²) search.
-
-In research: invest in how findings are organized (taxonomy, schema, ontology) before building analysis pipelines on top.
-
-## Efficient Data Representation and Layout
-
-Choose representations that make the common case cheap — in access patterns, cognitive load, and storage.
-
-Gotcha: Redundant representations create synchronization debt; sparse representations create access overhead. Pick the one that fits the dominant use pattern, document the trade-off.
-
-## Avoid Costly Abstractions
-
-Every abstraction layer has a cognitive cost. Only introduce one if it simplifies actual usage, not hypothetical future usage.
-
-Gotcha: "We might need this later" is not justification. Build the abstraction when the second concrete use case appears — not before. This applies equally to software interfaces and research taxonomy levels.
+Shape representation and layout for the dominant access pattern while naming the redundancy-versus-access trade-off. Add an abstraction only when a second concrete use simplifies actual work, never for hypothetical reuse.
