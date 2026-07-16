@@ -82,26 +82,25 @@ def main(argv: list[str] | None = None) -> int:
         out = python_tracer.trace_file(
             path, l1, l2, as_json=args.json, project_root=proot
         )
-        sys.stdout.write(out)
-        if not out.endswith("\n"):
-            sys.stdout.write("\n")
-        return 0
-
-    if lang == "rust":
+    elif lang == "rust":
         import rust_tracer
         out = rust_tracer.trace_file(
             str(path), (l1, l2),
             as_json=args.json,
             project_root=args.project_root,
         )
-        sys.stdout.write(out)
-        if not out.endswith("\n"):
-            sys.stdout.write("\n")
-        return 0
+    else:
+        print(
+            f"error: unsupported language for {path.name} "
+            f"(detected: {lang or 'unknown'})",
+            file=sys.stderr,
+        )
+        return 2
 
-    print(f"error: unsupported language for {path.name} (detected: {lang or 'unknown'})",
-          file=sys.stderr)
-    return 2
+    sys.stdout.write(out)
+    if not out.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
 
 
 if __name__ == "__main__":

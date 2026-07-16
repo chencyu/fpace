@@ -24,9 +24,7 @@ from pathlib import Path
 from typing import Any
 
 
-# ---------------------------------------------------------------------------
 # Project-root detection
-# ---------------------------------------------------------------------------
 
 PROJECT_MARKERS = (
     "pyproject.toml",
@@ -44,15 +42,12 @@ def find_project_root(start: Path) -> Path:
     if cur.is_file():
         cur = cur.parent
     for parent in [cur, *cur.parents]:
-        for marker in PROJECT_MARKERS:
-            if (parent / marker).exists():
-                return parent
+        if any((parent / marker).exists() for marker in PROJECT_MARKERS):
+            return parent
     return cur
 
 
-# ---------------------------------------------------------------------------
 # AST helpers
-# ---------------------------------------------------------------------------
 
 def _line(n: ast.AST) -> int:
     return getattr(n, "lineno", 0)
@@ -89,9 +84,7 @@ def _attr_path(node: ast.AST) -> list[str] | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Bindings & Scopes
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Binding:
@@ -144,9 +137,7 @@ class Scope:
         return out
 
 
-# ---------------------------------------------------------------------------
 # Scope builder
-# ---------------------------------------------------------------------------
 
 class ScopeBuilder(ast.NodeVisitor):
     def __init__(self, source: str):
@@ -355,9 +346,7 @@ class ScopeBuilder(ast.NodeVisitor):
             self.scope.uses[node.id].append(node)
 
 
-# ---------------------------------------------------------------------------
 # Name resolution (LEGB)
-# ---------------------------------------------------------------------------
 
 def resolve_name(scope: Scope, name: str) -> tuple[Scope, list[Binding]] | None:
     cur = scope
@@ -382,9 +371,7 @@ def resolve_name(scope: Scope, name: str) -> tuple[Scope, list[Binding]] | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Cross-file project-local resolver
-# ---------------------------------------------------------------------------
 
 class Resolver:
     """Owns project root + parsed-module cache. Resolves cross-file references
@@ -481,9 +468,7 @@ class Resolver:
         return None
 
 
-# ---------------------------------------------------------------------------
 # Resolution chain
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Step:
@@ -514,7 +499,7 @@ _BUILTIN_NAMES = frozenset(dir(_builtins))
 _MAX_DEPTH = 12
 
 
-def _class_base_paths(class_scope: Scope, source: str) -> list[list[str]]:
+def _class_base_paths(class_scope: Scope) -> list[list[str]]:
     """Extract dotted name paths for a class's bases (best-effort)."""
     node = class_scope.node
     if not isinstance(node, ast.ClassDef):
@@ -549,8 +534,8 @@ def _lookup_in_class_chain(
     parsed = resolver.parse(class_file)
     if parsed is None:
         return None
-    _, mod_scope, source = parsed
-    for base_parts in _class_base_paths(class_scope, source):
+    _, mod_scope, _ = parsed
+    for base_parts in _class_base_paths(class_scope):
         # Resolve the base from the class's enclosing module scope
         base_steps = resolve_path(mod_scope, class_file, base_parts, resolver)
         # Find the deepest binding that is a class-def
@@ -805,9 +790,7 @@ def resolve_path(
     return steps
 
 
-# ---------------------------------------------------------------------------
 # Implicit-invariant collectors
-# ---------------------------------------------------------------------------
 
 _RESOURCE_ACQUIRE = {
     "open": "close",
@@ -850,9 +833,7 @@ def _is_mutable_default(node: ast.AST) -> bool:
                              ast.ListComp, ast.DictComp, ast.SetComp))
 
 
-# ---------------------------------------------------------------------------
 # Reports
-# ---------------------------------------------------------------------------
 
 @dataclass
 class _VarReport:
@@ -947,9 +928,7 @@ def _build_call_reports(
     return out
 
 
-# ---------------------------------------------------------------------------
 # Trace driver
-# ---------------------------------------------------------------------------
 
 def trace_file(
     path: Path,
@@ -1309,16 +1288,16 @@ def trace_file(
 
     if as_json:
         return json.dumps(payload, indent=2, ensure_ascii=False)
-    return _render_markdown(payload, resolver)
+    return _render_markdown(payload)
 
 
 def _extract_source_lines(source: str, l1: int, l2: int) -> list[tuple[int, str]]:
     lines = source.splitlines()
-    out = []
-    for i in range(l1, l2 + 1):
-        if 1 <= i <= len(lines):
-            out.append((i, lines[i - 1]))
-    return out
+    return [
+        (i, lines[i - 1])
+        for i in range(l1, l2 + 1)
+        if 1 <= i <= len(lines)
+    ]
 
 
 def _vr_to_dict(v: _VarReport, resolver: Resolver) -> dict[str, Any]:
@@ -1343,9 +1322,7 @@ def _vr_to_dict(v: _VarReport, resolver: Resolver) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
 # Markdown renderer
-# ---------------------------------------------------------------------------
 
 def _fmt_step(s: dict[str, Any]) -> str:
     k = s["kind"]
@@ -1383,7 +1360,7 @@ def _render_chain(chain: list[dict[str, Any]], indent: str = "  ") -> str:
     return "\n".join(f"{indent}- {_fmt_step(s)}" for s in chain)
 
 
-def _render_markdown(p: dict[str, Any], resolver: Resolver) -> str:
+def _render_markdown(p: dict[str, Any]) -> str:
     out = io.StringIO()
     w = out.write
 

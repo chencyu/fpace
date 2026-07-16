@@ -1,14 +1,8 @@
-// ctt_rust — Rust counterpart of python_tracer.py for the code-context-trace skill.
-//
-// Given a Rust file path and a line range, emit the full project-local
-// resolution chain for every name referenced in the range, plus the implicit
-// invariants (unsafe blocks, ? propagation, panic surfaces, mut bindings,
-// cfg-gated code, lifetimes, attribute macros, type annotations).
-//
-// Determinism contract: project-local resolution is exhaustive. External
-// crates (anything not under the detected workspace root) are marked but
-// not expanded. Macro expansion is not performed; macro-defined items are
-// noted as such.
+// Deterministic Rust counterpart to `python_tracer.py`: for every name referenced in a
+// Rust file range, emit its exhaustive project-local resolution chain plus unsafe blocks,
+// `?` propagation, panic surfaces, mutable bindings, cfg gates, lifetimes, attribute macros,
+// and type annotations. Mark but never expand external crates (outside the detected workspace
+// root); note macro-defined items without expanding macros.
 
 use proc_macro2::LineColumn;
 use serde::Serialize;
@@ -20,7 +14,6 @@ use std::process::ExitCode;
 use syn::spanned::Spanned;
 use syn::{visit::Visit, Item, UseTree};
 
-// ─────────────────────────────────────────────────────────────────────────────
 // CLI
 
 #[derive(Debug)]
@@ -60,7 +53,12 @@ fn parse_args() -> Result<Args, String> {
     let file = file.ok_or("missing <file>")?;
     let range_str = range_str.ok_or("missing <range>")?;
     let range = parse_range(&range_str)?;
-    Ok(Args { file, range, project_root, json })
+    Ok(Args {
+        file,
+        range,
+        project_root,
+        json,
+    })
 }
 
 fn parse_range(s: &str) -> Result<(usize, usize), String> {
@@ -73,15 +71,20 @@ fn parse_range(s: &str) -> Result<(usize, usize), String> {
     } else {
         vec![s, s]
     };
-    let lo = parts[0].trim_start_matches('L').parse::<usize>()
+    let lo = parts[0]
+        .trim_start_matches('L')
+        .parse::<usize>()
         .map_err(|e| format!("bad range start: {e}"))?;
-    let hi = parts[1].trim_start_matches('L').parse::<usize>()
+    let hi = parts[1]
+        .trim_start_matches('L')
+        .parse::<usize>()
         .map_err(|e| format!("bad range end: {e}"))?;
-    if lo > hi { return Err("range start > end".into()); }
+    if lo > hi {
+        return Err("range start > end".into());
+    }
     Ok((lo, hi))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Project root + crate discovery
 
 fn find_project_root(start: &Path, override_: Option<&Path>) -> PathBuf {
@@ -158,15 +161,25 @@ fn discover_crates(project_root: &Path) -> Vec<CrateInfo> {
 
 fn discover_crates_at(dir: &Path, out: &mut Vec<CrateInfo>) {
     let cargo = dir.join("Cargo.toml");
-    if !cargo.is_file() { return; }
-    let text = match fs::read_to_string(&cargo) { Ok(t) => t, Err(_) => return };
-    let parsed: toml::Value = match text.parse() { Ok(v) => v, Err(_) => return };
-    let pkg_name = parsed.get("package")
+    if !cargo.is_file() {
+        return;
+    }
+    let text = match fs::read_to_string(&cargo) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let parsed: toml::Value = match text.parse() {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let pkg_name = parsed
+        .get("package")
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .map(|s| s.replace('-', "_"));
     // [lib]
-    let lib_path = parsed.get("lib")
+    let lib_path = parsed
+        .get("lib")
         .and_then(|l| l.get("path"))
         .and_then(|p| p.as_str())
         .map(|s| dir.join(s));
@@ -174,20 +187,35 @@ fn discover_crates_at(dir: &Path, out: &mut Vec<CrateInfo>) {
     if let Some(name) = &pkg_name {
         if let Some(lp) = &lib_path {
             if lp.is_file() {
-                out.push(CrateInfo { name: name.clone(), root_file: lp.clone(), crate_dir: dir.to_path_buf() });
+                out.push(CrateInfo {
+                    name: name.clone(),
+                    root_file: lp.clone(),
+                    crate_dir: dir.to_path_buf(),
+                });
             }
         } else if default_lib.is_file() {
-            out.push(CrateInfo { name: name.clone(), root_file: default_lib.clone(), crate_dir: dir.to_path_buf() });
+            out.push(CrateInfo {
+                name: name.clone(),
+                root_file: default_lib.clone(),
+                crate_dir: dir.to_path_buf(),
+            });
         }
     }
     // [[bin]]
     if let Some(bins) = parsed.get("bin").and_then(|b| b.as_array()) {
         for b in bins {
-            let name = b.get("name").and_then(|n| n.as_str()).map(|s| s.replace('-', "_"));
+            let name = b
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.replace('-', "_"));
             let path = b.get("path").and_then(|p| p.as_str()).map(|s| dir.join(s));
             if let (Some(name), Some(path)) = (name, path) {
                 if path.is_file() {
-                    out.push(CrateInfo { name, root_file: path, crate_dir: dir.to_path_buf() });
+                    out.push(CrateInfo {
+                        name,
+                        root_file: path,
+                        crate_dir: dir.to_path_buf(),
+                    });
                 }
             }
         }
@@ -196,7 +224,11 @@ fn discover_crates_at(dir: &Path, out: &mut Vec<CrateInfo>) {
     let default_main = dir.join("src").join("main.rs");
     if let Some(name) = &pkg_name {
         if default_main.is_file() && !out.iter().any(|c| c.root_file == default_main) {
-            out.push(CrateInfo { name: name.clone(), root_file: default_main, crate_dir: dir.to_path_buf() });
+            out.push(CrateInfo {
+                name: name.clone(),
+                root_file: default_main,
+                crate_dir: dir.to_path_buf(),
+            });
         }
     }
     // src/bin/*.rs
@@ -206,13 +238,29 @@ fn discover_crates_at(dir: &Path, out: &mut Vec<CrateInfo>) {
             for ent in rd.flatten() {
                 let p = ent.path();
                 if p.extension().and_then(|e| e.to_str()) == Some("rs") {
-                    let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("bin").replace('-', "_");
-                    out.push(CrateInfo { name, root_file: p, crate_dir: dir.to_path_buf() });
+                    let name = p
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("bin")
+                        .replace('-', "_");
+                    out.push(CrateInfo {
+                        name,
+                        root_file: p,
+                        crate_dir: dir.to_path_buf(),
+                    });
                 } else if p.is_dir() {
                     let mainrs = p.join("main.rs");
                     if mainrs.is_file() {
-                        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("bin").replace('-', "_");
-                        out.push(CrateInfo { name, root_file: mainrs, crate_dir: dir.to_path_buf() });
+                        let name = p
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("bin")
+                            .replace('-', "_");
+                        out.push(CrateInfo {
+                            name,
+                            root_file: mainrs,
+                            crate_dir: dir.to_path_buf(),
+                        });
                     }
                 }
             }
@@ -220,47 +268,6 @@ fn discover_crates_at(dir: &Path, out: &mut Vec<CrateInfo>) {
     }
 }
 
-/// Find which crate the query file belongs to, plus its module path within that crate.
-fn locate_file_in_crates(crates: &[CrateInfo], file: &Path) -> Option<(CrateInfo, Vec<String>)> {
-    let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-    // Best crate = one whose root_file is in the deepest enclosing dir of `file`.
-    let mut best: Option<(CrateInfo, Vec<String>)> = None;
-    for c in crates {
-        let root_dir = c.root_file.parent().unwrap_or(&c.crate_dir);
-        if let Ok(rel) = file.strip_prefix(root_dir) {
-            let comps: Vec<String> = rel.components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .collect();
-            // Module path is comps without trailing .rs and without mod.rs marker
-            let mut mods: Vec<String> = Vec::new();
-            for (i, p) in comps.iter().enumerate() {
-                if i == comps.len() - 1 {
-                    let stem = p.strip_suffix(".rs").unwrap_or(p);
-                    if stem != "mod" && stem != "lib" && stem != "main"
-                       && !c.root_file.ends_with(p) // root file maps to crate root
-                    {
-                        mods.push(stem.to_string());
-                    }
-                } else {
-                    mods.push(p.clone());
-                }
-            }
-            let candidate = (c.clone(), mods);
-            best = match best {
-                None => Some(candidate),
-                Some(prev) => {
-                    if candidate.1.len() <= prev.1.len()
-                       && candidate.0.crate_dir.starts_with(&prev.0.crate_dir) {
-                        Some(candidate)
-                    } else { Some(prev) }
-                }
-            };
-        }
-    }
-    best
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Module tree (mod foo; resolution)
 
 fn module_file_candidates(parent_file: &Path, mod_name: &str) -> Vec<PathBuf> {
@@ -275,7 +282,10 @@ fn module_file_candidates(parent_file: &Path, mod_name: &str) -> Vec<PathBuf> {
         out.push(parent_dir.join(mod_name).join("mod.rs"));
     } else {
         // sibling module under a directory named after parent stem
-        let stem = parent_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let stem = parent_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         let sub = parent_dir.join(stem);
         out.push(sub.join(format!("{mod_name}.rs")));
         out.push(sub.join(mod_name).join("mod.rs"));
@@ -286,7 +296,6 @@ fn module_file_candidates(parent_file: &Path, mod_name: &str) -> Vec<PathBuf> {
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Parse cache + module item index
 
 struct ParseCache {
@@ -294,14 +303,19 @@ struct ParseCache {
 }
 
 impl ParseCache {
-    fn new() -> Self { Self { files: HashMap::new() } }
+    fn new() -> Self {
+        Self {
+            files: HashMap::new(),
+        }
+    }
     fn get(&mut self, path: &Path) -> Result<&syn::File, String> {
         let path = path.to_path_buf();
         if !self.files.contains_key(&path) {
             let parsed = fs::read_to_string(&path)
                 .map_err(|e| format!("read {}: {}", path.display(), e))
-                .and_then(|src| syn::parse_file(&src)
-                    .map_err(|e| format!("parse {}: {}", path.display(), e)));
+                .and_then(|src| {
+                    syn::parse_file(&src).map_err(|e| format!("parse {}: {}", path.display(), e))
+                });
             self.files.insert(path.clone(), parsed);
         }
         match self.files.get(&path).unwrap() {
@@ -311,30 +325,18 @@ impl ParseCache {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Scope + binding
 
 #[derive(Debug, Clone, Serialize)]
 struct Binding {
     name: String,
-    kind: String,    // "let", "param", "for-pat", "if-let", "while-let", "match-pat", "closure-param", "fn", "struct", "enum", "trait", "impl-method", "const", "static", "type-alias", "mod", "use", "use-as", "use-glob"
+    kind: String, // "let", "param", "for-pat", "if-let", "while-let", "match-pat", "closure-param", "fn", "struct", "enum", "trait", "impl-method", "const", "static", "type-alias", "mod", "use", "use-as", "use-glob"
     line: usize,
     detail: String,
     annotation: Option<String>,
     is_mut: bool,
-    // For uses: the resolved path segments
-    use_path: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default)]
-struct ScopeCollection {
-    bindings_by_line: BTreeMap<usize, Vec<Binding>>,
-    enclosing_kind: String,
-    enclosing_name: String,
-    enclosing_line: usize,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Reference collection in range
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,12 +363,17 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
         let in_range = line >= self.range.0 && line <= self.range.1;
         match node {
             syn::Expr::Path(ep) if in_range => {
-                let segs: Vec<String> = ep.path.segments.iter()
-                    .map(|s| s.ident.to_string()).collect();
+                let segs: Vec<String> = ep
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
                 if let Some(name) = segs.first() {
                     self.refs.push(Reference {
                         name: name.clone(),
-                        line, column,
+                        line,
+                        column,
                         full_path: segs.clone(),
                         is_call: false,
                         method_receiver: None,
@@ -376,12 +383,17 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
             }
             syn::Expr::Call(c) if in_range => {
                 if let syn::Expr::Path(ep) = &*c.func {
-                    let segs: Vec<String> = ep.path.segments.iter()
-                        .map(|s| s.ident.to_string()).collect();
+                    let segs: Vec<String> = ep
+                        .path
+                        .segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect();
                     if let Some(name) = segs.first() {
                         self.refs.push(Reference {
                             name: name.clone(),
-                            line, column,
+                            line,
+                            column,
                             full_path: segs.clone(),
                             is_call: true,
                             method_receiver: None,
@@ -392,13 +404,21 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
             }
             syn::Expr::MethodCall(m) if in_range => {
                 // Try to capture receiver as a simple Path for resolution
-                let recv_ref = simple_path_of(&m.receiver).map(|(name, segs, l, c)| Box::new(Reference {
-                    name, line: l, column: c, full_path: segs,
-                    is_call: false, method_receiver: None, method_name: None,
-                }));
+                let recv_ref = simple_path_of(&m.receiver).map(|(name, segs, l, c)| {
+                    Box::new(Reference {
+                        name,
+                        line: l,
+                        column: c,
+                        full_path: segs,
+                        is_call: false,
+                        method_receiver: None,
+                        method_name: None,
+                    })
+                });
                 self.refs.push(Reference {
                     name: m.method.to_string(),
-                    line, column,
+                    line,
+                    column,
                     full_path: vec![m.method.to_string()],
                     is_call: true,
                     method_receiver: recv_ref,
@@ -413,7 +433,12 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
 
 fn simple_path_of(expr: &syn::Expr) -> Option<(String, Vec<String>, usize, usize)> {
     if let syn::Expr::Path(ep) = expr {
-        let segs: Vec<String> = ep.path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let segs: Vec<String> = ep
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
         let name = segs.first()?.clone();
         let lc = ep.span().start();
         return Some((name, segs, lc.line, lc.column));
@@ -421,7 +446,6 @@ fn simple_path_of(expr: &syn::Expr) -> Option<(String, Vec<String>, usize, usize
     None
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Local scope visitor (collect bindings inside the enclosing item)
 
 struct LocalScopeVisitor {
@@ -447,10 +471,6 @@ impl LocalScopeVisitor {
     fn in_range(&self, line: usize) -> bool {
         line >= self.range.0 && line <= self.range.1
     }
-    fn track_pat(&mut self, pat: &syn::Pat, ty: Option<&syn::Type>, kind: &str, detail: String) {
-        let _ = kind; let _ = detail;
-        collect_pat_bindings(pat, ty, &mut self.bindings, "let");
-    }
 }
 
 fn pretty_type(ty: &syn::Type) -> String {
@@ -465,10 +485,19 @@ fn pretty_pat(pat: &syn::Pat) -> String {
 fn pretty_expr(expr: &syn::Expr) -> String {
     let toks = quote::quote!(#expr).to_string();
     let s = toks.split_whitespace().collect::<Vec<_>>().join(" ");
-    if s.len() > 120 { format!("{}…", &s[..120]) } else { s }
+    if s.len() > 120 {
+        format!("{}…", &s[..120])
+    } else {
+        s
+    }
 }
 
-fn collect_pat_bindings(pat: &syn::Pat, ty: Option<&syn::Type>, out: &mut Vec<Binding>, kind: &str) {
+fn collect_pat_bindings(
+    pat: &syn::Pat,
+    ty: Option<&syn::Type>,
+    out: &mut Vec<Binding>,
+    kind: &str,
+) {
     match pat {
         syn::Pat::Ident(pi) => {
             let line = pi.span().start().line;
@@ -479,7 +508,6 @@ fn collect_pat_bindings(pat: &syn::Pat, ty: Option<&syn::Type>, out: &mut Vec<Bi
                 detail: pretty_pat(pat),
                 annotation: ty.map(pretty_type),
                 is_mut: pi.mutability.is_some(),
-                use_path: None,
             });
             if let Some((_, sub)) = &pi.subpat {
                 collect_pat_bindings(sub, ty, out, kind);
@@ -489,20 +517,30 @@ fn collect_pat_bindings(pat: &syn::Pat, ty: Option<&syn::Type>, out: &mut Vec<Bi
             collect_pat_bindings(&pt.pat, Some(&pt.ty), out, kind);
         }
         syn::Pat::Tuple(t) => {
-            for p in &t.elems { collect_pat_bindings(p, None, out, kind); }
+            for p in &t.elems {
+                collect_pat_bindings(p, None, out, kind);
+            }
         }
         syn::Pat::TupleStruct(ts) => {
-            for p in &ts.elems { collect_pat_bindings(p, None, out, kind); }
+            for p in &ts.elems {
+                collect_pat_bindings(p, None, out, kind);
+            }
         }
         syn::Pat::Struct(s) => {
-            for f in &s.fields { collect_pat_bindings(&f.pat, None, out, kind); }
+            for f in &s.fields {
+                collect_pat_bindings(&f.pat, None, out, kind);
+            }
         }
         syn::Pat::Reference(r) => collect_pat_bindings(&r.pat, ty, out, kind),
         syn::Pat::Or(o) => {
-            for p in &o.cases { collect_pat_bindings(p, ty, out, kind); }
+            for p in &o.cases {
+                collect_pat_bindings(p, ty, out, kind);
+            }
         }
         syn::Pat::Slice(s) => {
-            for p in &s.elems { collect_pat_bindings(p, None, out, kind); }
+            for p in &s.elems {
+                collect_pat_bindings(p, None, out, kind);
+            }
         }
         syn::Pat::Paren(p) => collect_pat_bindings(&p.pat, ty, out, kind),
         _ => {}
@@ -511,7 +549,11 @@ fn collect_pat_bindings(pat: &syn::Pat, ty: Option<&syn::Type>, out: &mut Vec<Bi
 
 impl<'ast> Visit<'ast> for LocalScopeVisitor {
     fn visit_local(&mut self, node: &'ast syn::Local) {
-        let init_detail = node.init.as_ref().map(|i| pretty_expr(&i.expr)).unwrap_or_default();
+        let init_detail = node
+            .init
+            .as_ref()
+            .map(|i| pretty_expr(&i.expr))
+            .unwrap_or_default();
         let ty = match &node.pat {
             syn::Pat::Type(pt) => Some(&*pt.ty),
             _ => None,
@@ -525,10 +567,14 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
                 b.detail = format!("let {}", pretty_pat(&node.pat));
             }
             if b.is_mut {
-                self.invariants.mut_bindings.push((b.line, b.detail.clone()));
+                self.invariants
+                    .mut_bindings
+                    .push((b.line, b.detail.clone()));
             }
             if let Some(ann) = &b.annotation {
-                self.invariants.type_annotations.push((b.line, format!("let {}: {}", b.name, ann)));
+                self.invariants
+                    .type_annotations
+                    .push((b.line, format!("let {}: {}", b.name, ann)));
             }
         }
         self.bindings.extend(new_bindings);
@@ -539,7 +585,11 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
         let mut new_bindings = Vec::new();
         collect_pat_bindings(&node.pat, None, &mut new_bindings, "for-pat");
         for b in &mut new_bindings {
-            b.detail = format!("for {} in {}", pretty_pat(&node.pat), pretty_expr(&node.expr));
+            b.detail = format!(
+                "for {} in {}",
+                pretty_pat(&node.pat),
+                pretty_expr(&node.expr)
+            );
         }
         self.bindings.extend(new_bindings);
         syn::visit::visit_expr_for_loop(self, node);
@@ -549,7 +599,11 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
         let mut new_bindings = Vec::new();
         collect_pat_bindings(&node.pat, None, &mut new_bindings, "if-let");
         for b in &mut new_bindings {
-            b.detail = format!("if let {} = {}", pretty_pat(&node.pat), pretty_expr(&node.expr));
+            b.detail = format!(
+                "if let {} = {}",
+                pretty_pat(&node.pat),
+                pretty_expr(&node.expr)
+            );
         }
         self.bindings.extend(new_bindings);
         syn::visit::visit_expr_let(self, node);
@@ -580,7 +634,9 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
     fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
         let line = node.span().start().line;
         if self.in_range(line) {
-            self.invariants.unsafe_blocks.push((line, "unsafe { ... }".into()));
+            self.invariants
+                .unsafe_blocks
+                .push((line, "unsafe { ... }".into()));
         }
         syn::visit::visit_expr_unsafe(self, node);
     }
@@ -588,7 +644,9 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
     fn visit_expr_try(&mut self, node: &'ast syn::ExprTry) {
         let line = node.span().start().line;
         if self.in_range(line) {
-            self.invariants.try_propagations.push((line, format!("{}?", pretty_expr(&node.expr))));
+            self.invariants
+                .try_propagations
+                .push((line, format!("{}?", pretty_expr(&node.expr))));
         }
         syn::visit::visit_expr_try(self, node);
     }
@@ -597,10 +655,15 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
         let line = node.span().start().line;
         let m = node.method.to_string();
         if self.in_range(line) && PANIC_METHODS.contains(&m.as_str()) {
-            self.invariants.panic_surfaces.push((line, format!(".{}()  on {}", m, pretty_expr(&node.receiver))));
+            self.invariants.panic_surfaces.push((
+                line,
+                format!(".{}()  on {}", m, pretty_expr(&node.receiver)),
+            ));
         }
         if self.in_range(line) && SIDE_EFFECT_METHODS.contains(&m.as_str()) {
-            self.invariants.side_effects.push((line, format!("call .{}() — likely I/O or mutation", m)));
+            self.invariants
+                .side_effects
+                .push((line, format!("call .{}() — likely I/O or mutation", m)));
         }
         syn::visit::visit_expr_method_call(self, node);
     }
@@ -611,10 +674,14 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
             if let Some(seg) = node.mac.path.segments.last() {
                 let name = seg.ident.to_string();
                 if PANIC_MACROS.contains(&name.as_str()) {
-                    self.invariants.panic_surfaces.push((line, format!("{}!(...)", name)));
+                    self.invariants
+                        .panic_surfaces
+                        .push((line, format!("{}!(...)", name)));
                 }
                 if IO_MACROS.contains(&name.as_str()) {
-                    self.invariants.side_effects.push((line, format!("{}!(...) — I/O macro", name)));
+                    self.invariants
+                        .side_effects
+                        .push((line, format!("{}!(...) — I/O macro", name)));
                 }
             }
         }
@@ -624,22 +691,51 @@ impl<'ast> Visit<'ast> for LocalScopeVisitor {
     fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
         let line = node.span().start().line;
         if self.in_range(line) {
-            self.invariants.side_effects.push((line, format!("assign: {} = ...", pretty_expr(&node.left))));
+            self.invariants
+                .side_effects
+                .push((line, format!("assign: {} = ...", pretty_expr(&node.left))));
         }
         syn::visit::visit_expr_assign(self, node);
     }
 }
 
 const PANIC_METHODS: &[&str] = &[
-    "unwrap", "expect", "unwrap_err", "expect_err", "unwrap_unchecked",
+    "unwrap",
+    "expect",
+    "unwrap_err",
+    "expect_err",
+    "unwrap_unchecked",
 ];
 const PANIC_MACROS: &[&str] = &[
-    "panic", "unreachable", "todo", "unimplemented", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne",
+    "panic",
+    "unreachable",
+    "todo",
+    "unimplemented",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
 ];
 const SIDE_EFFECT_METHODS: &[&str] = &[
-    "write", "write_all", "write_fmt", "flush", "send", "recv",
-    "lock", "borrow_mut", "set", "insert", "remove", "push", "pop", "clear", "extend",
-    "spawn", "spawn_blocking",
+    "write",
+    "write_all",
+    "write_fmt",
+    "flush",
+    "send",
+    "recv",
+    "lock",
+    "borrow_mut",
+    "set",
+    "insert",
+    "remove",
+    "push",
+    "pop",
+    "clear",
+    "extend",
+    "spawn",
+    "spawn_blocking",
 ];
 const IO_MACROS: &[&str] = &[
     "println", "eprintln", "print", "eprint", "write", "writeln", "dbg",
@@ -647,23 +743,56 @@ const IO_MACROS: &[&str] = &[
 
 const STD_PRELUDE: &[&str] = &[
     // types
-    "Option", "Result", "Vec", "String", "Box", "Rc", "Arc", "Cell", "RefCell",
-    "HashMap", "HashSet", "BTreeMap", "BTreeSet", "VecDeque", "PathBuf", "Path",
+    "Option",
+    "Result",
+    "Vec",
+    "String",
+    "Box",
+    "Rc",
+    "Arc",
+    "Cell",
+    "RefCell",
+    "HashMap",
+    "HashSet",
+    "BTreeMap",
+    "BTreeSet",
+    "VecDeque",
+    "PathBuf",
+    "Path",
     // variants
-    "Some", "None", "Ok", "Err",
+    "Some",
+    "None",
+    "Ok",
+    "Err",
     // traits commonly used by name
-    "Default", "Clone", "Copy", "Drop", "From", "Into", "TryFrom", "TryInto",
-    "Iterator", "IntoIterator", "FromIterator", "AsRef", "AsMut", "Deref", "DerefMut",
-    "Send", "Sync", "Sized", "Display", "Debug",
+    "Default",
+    "Clone",
+    "Copy",
+    "Drop",
+    "From",
+    "Into",
+    "TryFrom",
+    "TryInto",
+    "Iterator",
+    "IntoIterator",
+    "FromIterator",
+    "AsRef",
+    "AsMut",
+    "Deref",
+    "DerefMut",
+    "Send",
+    "Sync",
+    "Sized",
+    "Display",
+    "Debug",
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
 // File-level item indexing (for resolution)
 
 #[derive(Debug, Clone, Serialize)]
 struct ItemEntry {
     name: String,
-    kind: String,      // "fn", "struct", "enum", "trait", "const", "static", "type-alias", "mod", "macro"
+    kind: String, // "fn", "struct", "enum", "trait", "const", "static", "type-alias", "mod", "macro"
     line: usize,
     has_body: bool,
 }
@@ -671,8 +800,6 @@ struct ItemEntry {
 #[derive(Debug, Default, Clone)]
 struct ModuleIndex {
     items: HashMap<String, ItemEntry>,
-    /// Inline modules: name -> child syn::File equivalent (kept as items list of original file)
-    inline_mods: HashMap<String, usize>, // value: index into outer items array, used only as marker
     /// `mod foo;` declarations referencing external files
     mod_decls: Vec<String>,
     /// `use a::b::C [as D];` entries, by introduced binding name -> path segments
@@ -694,58 +821,104 @@ fn index_items(items: &[Item], idx: &mut ModuleIndex) {
         match item {
             Item::Fn(f) => {
                 let line = f.span().start().line;
-                idx.items.insert(f.sig.ident.to_string(), ItemEntry {
-                    name: f.sig.ident.to_string(),
-                    kind: "fn".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    f.sig.ident.to_string(),
+                    ItemEntry {
+                        name: f.sig.ident.to_string(),
+                        kind: "fn".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
                 collect_attrs(&f.attrs, line, idx);
                 collect_lifetimes(&f.sig.generics, line, idx);
             }
             Item::Struct(s) => {
                 let line = s.span().start().line;
-                idx.items.insert(s.ident.to_string(), ItemEntry {
-                    name: s.ident.to_string(), kind: "struct".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    s.ident.to_string(),
+                    ItemEntry {
+                        name: s.ident.to_string(),
+                        kind: "struct".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
                 collect_attrs(&s.attrs, line, idx);
                 collect_lifetimes(&s.generics, line, idx);
             }
             Item::Enum(e) => {
                 let line = e.span().start().line;
-                idx.items.insert(e.ident.to_string(), ItemEntry {
-                    name: e.ident.to_string(), kind: "enum".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    e.ident.to_string(),
+                    ItemEntry {
+                        name: e.ident.to_string(),
+                        kind: "enum".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
                 collect_attrs(&e.attrs, line, idx);
             }
             Item::Trait(t) => {
                 let line = t.span().start().line;
-                idx.items.insert(t.ident.to_string(), ItemEntry {
-                    name: t.ident.to_string(), kind: "trait".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    t.ident.to_string(),
+                    ItemEntry {
+                        name: t.ident.to_string(),
+                        kind: "trait".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
             }
             Item::Const(c) => {
                 let line = c.span().start().line;
-                idx.items.insert(c.ident.to_string(), ItemEntry {
-                    name: c.ident.to_string(), kind: "const".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    c.ident.to_string(),
+                    ItemEntry {
+                        name: c.ident.to_string(),
+                        kind: "const".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
             }
             Item::Static(s) => {
                 let line = s.span().start().line;
-                idx.items.insert(s.ident.to_string(), ItemEntry {
-                    name: s.ident.to_string(), kind: "static".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    s.ident.to_string(),
+                    ItemEntry {
+                        name: s.ident.to_string(),
+                        kind: "static".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
             }
             Item::Type(t) => {
                 let line = t.span().start().line;
-                idx.items.insert(t.ident.to_string(), ItemEntry {
-                    name: t.ident.to_string(), kind: "type-alias".into(), line, has_body: true,
-                });
+                idx.items.insert(
+                    t.ident.to_string(),
+                    ItemEntry {
+                        name: t.ident.to_string(),
+                        kind: "type-alias".into(),
+                        line,
+                        has_body: true,
+                    },
+                );
             }
             Item::Mod(m) => {
                 let line = m.span().start().line;
-                idx.items.insert(m.ident.to_string(), ItemEntry {
-                    name: m.ident.to_string(), kind: "mod".into(), line,
-                    has_body: m.content.is_some(),
-                });
+                idx.items.insert(
+                    m.ident.to_string(),
+                    ItemEntry {
+                        name: m.ident.to_string(),
+                        kind: "mod".into(),
+                        line,
+                        has_body: m.content.is_some(),
+                    },
+                );
                 if m.content.is_none() {
                     idx.mod_decls.push(m.ident.to_string());
                 }
@@ -755,7 +928,13 @@ fn index_items(items: &[Item], idx: &mut ModuleIndex) {
                 let mut acc = Vec::new();
                 walk_use_tree(&u.tree, &mut acc, idx, is_pub);
             }
-            Item::Macro(_) | Item::ExternCrate(_) | Item::ForeignMod(_) | Item::Verbatim(_) | Item::Union(_) | Item::Impl(_) | Item::TraitAlias(_) => {}
+            Item::Macro(_)
+            | Item::ExternCrate(_)
+            | Item::ForeignMod(_)
+            | Item::Verbatim(_)
+            | Item::Union(_)
+            | Item::Impl(_)
+            | Item::TraitAlias(_) => {}
             _ => {}
         }
     }
@@ -776,7 +955,14 @@ fn collect_attrs(attrs: &[syn::Attribute], line: usize, idx: &mut ModuleIndex) {
 fn collect_lifetimes(g: &syn::Generics, line: usize, idx: &mut ModuleIndex) {
     for p in &g.params {
         if let syn::GenericParam::Lifetime(_) = p {
-            idx.lifetimes.push((line, quote::quote!(#g).to_string().split_whitespace().collect::<Vec<_>>().join(" ")));
+            idx.lifetimes.push((
+                line,
+                quote::quote!(#g)
+                    .to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
             break;
         }
     }
@@ -794,20 +980,26 @@ fn walk_use_tree(tree: &UseTree, prefix: &mut Vec<String>, idx: &mut ModuleIndex
             let mut path = prefix.clone();
             path.push(name.clone());
             idx.uses.insert(name.clone(), path.clone());
-            if is_pub { idx.pub_uses.insert(name, path); }
+            if is_pub {
+                idx.pub_uses.insert(name, path);
+            }
         }
         UseTree::Rename(r) => {
             let alias = r.rename.to_string();
             let mut path = prefix.clone();
             path.push(r.ident.to_string());
             idx.uses.insert(alias.clone(), path.clone());
-            if is_pub { idx.pub_uses.insert(alias, path); }
+            if is_pub {
+                idx.pub_uses.insert(alias, path);
+            }
         }
         UseTree::Glob(_) => {
             idx.glob_uses.push(prefix.clone());
         }
         UseTree::Group(g) => {
-            for t in &g.items { walk_use_tree(t, prefix, idx, is_pub); }
+            for t in &g.items {
+                walk_use_tree(t, prefix, idx, is_pub);
+            }
         }
     }
 }
@@ -827,7 +1019,10 @@ fn index_impls(items: &[Item]) -> Vec<ImplEntry> {
         if let Item::Impl(im) = item {
             let type_name = type_path_last(&im.self_ty);
             let trait_name = im.trait_.as_ref().map(|(_, p, _)| {
-                p.segments.last().map(|s| s.ident.to_string()).unwrap_or_default()
+                p.segments
+                    .last()
+                    .map(|s| s.ident.to_string())
+                    .unwrap_or_default()
             });
             let mut methods = HashMap::new();
             for ii in &im.items {
@@ -840,7 +1035,12 @@ fn index_impls(items: &[Item]) -> Vec<ImplEntry> {
             }
             let line = im.span().start().line;
             if let Some(tn) = type_name {
-                out.push(ImplEntry { type_name: tn, trait_name, methods, line });
+                out.push(ImplEntry {
+                    type_name: tn,
+                    trait_name,
+                    methods,
+                    line,
+                });
             }
         }
     }
@@ -856,7 +1056,6 @@ fn type_path_last(ty: &syn::Type) -> Option<String> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Resolver: across files within project root
 
 struct Resolver {
@@ -871,7 +1070,8 @@ struct Resolver {
 impl Resolver {
     fn new(project_root: PathBuf, crates: Vec<CrateInfo>) -> Self {
         Self {
-            project_root, crates,
+            project_root,
+            crates,
             cache: ParseCache::new(),
             indices: HashMap::new(),
             impls_by_file: HashMap::new(),
@@ -893,7 +1093,9 @@ impl Resolver {
 
     fn index_file(&mut self, file: &Path) -> Result<(), String> {
         let key = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-        if self.indices.contains_key(&key) { return Ok(()); }
+        if self.indices.contains_key(&key) {
+            return Ok(());
+        }
         let f = self.cache.get(file)?.clone();
         let mut idx = ModuleIndex::default();
         index_items(&f.items, &mut idx);
@@ -923,7 +1125,8 @@ impl Resolver {
             if abs.starts_with(root_dir) {
                 let depth = root_dir.components().count();
                 if best.is_none() || depth > best_depth {
-                    best = Some(c); best_depth = depth;
+                    best = Some(c);
+                    best_depth = depth;
                 }
             }
         }
@@ -937,7 +1140,9 @@ impl Resolver {
             // Ensure current is indexed and we can see its mod_decls
             self.index_file(&current).ok()?;
             let key = current.canonicalize().unwrap_or_else(|_| current.clone());
-            let has_decl = self.indices.get(&key)
+            let has_decl = self
+                .indices
+                .get(&key)
                 .map(|i| i.mod_decls.iter().any(|m| m == seg))
                 .unwrap_or(false);
             // try external file
@@ -963,13 +1168,18 @@ impl Resolver {
         visited: &mut BTreeSet<(PathBuf, String)>,
     ) -> ResolveResult {
         if path.is_empty() {
-            return ResolveResult { kind: "unresolved".into(), steps: vec![], reason: "empty path".into() };
+            return ResolveResult {
+                kind: "unresolved".into(),
+                steps: vec![],
+                reason: "empty path".into(),
+            };
         }
         let crate_info = match self.crate_of(from_file) {
             Some(c) => c.clone(),
             None => {
                 return ResolveResult {
-                    kind: "external".into(), steps: vec![],
+                    kind: "external".into(),
+                    steps: vec![],
                     reason: "file not in any known crate".into(),
                 };
             }
@@ -978,7 +1188,10 @@ impl Resolver {
         let from_module_path = self.module_path_for_file(&crate_info, from_file);
         // Decide start file based on path prefix.
         let start_file: PathBuf = match working[0].as_str() {
-            "crate" => { working.remove(0); crate_info.root_file.clone() }
+            "crate" => {
+                working.remove(0);
+                crate_info.root_file.clone()
+            }
             "self" => {
                 working.remove(0);
                 self.module_path_to_file(&crate_info, &from_module_path)
@@ -989,28 +1202,27 @@ impl Resolver {
                 while !working.is_empty() && working[0] == "super" {
                     working.remove(0);
                     if mp.is_empty() {
-                        return ResolveResult { kind: "external".into(), steps: vec![],
-                            reason: "super beyond crate root".into() };
+                        return ResolveResult {
+                            kind: "external".into(),
+                            steps: vec![],
+                            reason: "super beyond crate root".into(),
+                        };
                     }
                     mp.pop();
                 }
-                self.module_path_to_file(&crate_info, &mp).unwrap_or_else(|| crate_info.root_file.clone())
+                self.module_path_to_file(&crate_info, &mp)
+                    .unwrap_or_else(|| crate_info.root_file.clone())
             }
-            other if other == crate_info.name => { working.remove(0); crate_info.root_file.clone() }
+            other if other == crate_info.name => {
+                working.remove(0);
+                crate_info.root_file.clone()
+            }
             other => {
                 // sibling crate?
                 let sibling = self.crates.iter().find(|c| c.name == *other).cloned();
                 if let Some(sib) = sibling {
                     working.remove(0);
-                    return self.walk_from(sib.root_file.clone(), &working,
-                        vec![Step {
-                            kind: "module-file".into(),
-                            file: self.display_path(&sib.root_file),
-                            line: 0,
-                            name: sib.name.clone(),
-                            detail: format!("crate `{}` root", sib.name),
-                        }],
-                        visited);
+                    return self.resolve_path_in_crate(&sib, &working, vec![], visited);
                 }
                 // Not a crate prefix; treat as a name to look up starting from from_file.
                 from_file.to_path_buf()
@@ -1047,7 +1259,11 @@ impl Resolver {
         visited: &mut BTreeSet<(PathBuf, String)>,
     ) -> ResolveResult {
         if path.is_empty() {
-            return ResolveResult { kind: "unresolved".into(), steps, reason: "empty".into() };
+            return ResolveResult {
+                kind: "unresolved".into(),
+                steps,
+                reason: "empty".into(),
+            };
         }
         let mut current_file = start_file;
         let mut i = 0;
@@ -1057,19 +1273,32 @@ impl Resolver {
                 steps.push(Step {
                     kind: "parse-error".into(),
                     file: self.display_path(&current_file),
-                    line: 0, name: seg.clone(),
+                    line: 0,
+                    name: seg.clone(),
                     detail: "parse failed".into(),
                 });
-                return ResolveResult { kind: "parse-error".into(), steps, reason: "parse failed".into() };
+                return ResolveResult {
+                    kind: "parse-error".into(),
+                    steps,
+                    reason: "parse failed".into(),
+                };
             }
-            let key = current_file.canonicalize().unwrap_or_else(|_| current_file.clone());
+            let key = current_file
+                .canonicalize()
+                .unwrap_or_else(|_| current_file.clone());
             if !visited.insert((key.clone(), seg.clone())) {
                 steps.push(Step {
                     kind: "cycle".into(),
-                    file: self.display_path(&current_file), line: 0, name: seg.clone(),
+                    file: self.display_path(&current_file),
+                    line: 0,
+                    name: seg.clone(),
                     detail: "cycle in resolution".into(),
                 });
-                return ResolveResult { kind: "cycle".into(), steps, reason: "cycle".into() };
+                return ResolveResult {
+                    kind: "cycle".into(),
+                    steps,
+                    reason: "cycle".into(),
+                };
             }
             let idx = self.indices.get(&key).cloned().unwrap_or_default();
 
@@ -1081,7 +1310,8 @@ impl Resolver {
                         steps.push(Step {
                             kind: "module-file".into(),
                             file: self.display_path(&child),
-                            line: 0, name: seg.clone(),
+                            line: 0,
+                            name: seg.clone(),
                             detail: format!("module `{}`", seg),
                         });
                         current_file = child;
@@ -1092,56 +1322,70 @@ impl Resolver {
                         steps.push(Step {
                             kind: "inline-mod".into(),
                             file: self.display_path(&current_file),
-                            line: it.line, name: seg.clone(),
+                            line: it.line,
+                            name: seg.clone(),
                             detail: format!("inline module `{}` (cannot recurse by file)", seg),
                         });
-                        return ResolveResult { kind: "inline-mod".into(), steps, reason: "inline mod".into() };
+                        return ResolveResult {
+                            kind: "inline-mod".into(),
+                            steps,
+                            reason: "inline mod".into(),
+                        };
                     }
                 }
                 // non-mod item
                 steps.push(Step {
                     kind: format!("{}-def", it.kind),
                     file: self.display_path(&current_file),
-                    line: it.line, name: it.name.clone(),
+                    line: it.line,
+                    name: it.name.clone(),
                     detail: format!("{} `{}`", it.kind, it.name),
                 });
                 if i + 1 < path.len() {
                     let method = path[i + 1].clone();
                     let cur = current_file.clone();
-                    return self.resolve_method_on_type(&cur, &seg, &method, steps, visited);
+                    return self.resolve_method_on_type(&cur, &seg, &method, steps);
                 }
-                return ResolveResult { kind: format!("{}-def", it.kind), steps, reason: String::new() };
+                return ResolveResult {
+                    kind: format!("{}-def", it.kind),
+                    steps,
+                    reason: String::new(),
+                };
             }
             // (2) pub use re-export
             if let Some(u) = idx.pub_uses.get(&seg).cloned() {
                 steps.push(Step {
                     kind: "pub-use".into(),
                     file: self.display_path(&current_file),
-                    line: 0, name: seg.clone(),
+                    line: 0,
+                    name: seg.clone(),
                     detail: format!("pub use {}", u.join("::")),
                 });
                 let mut combined = u;
                 combined.extend(path[i + 1..].iter().cloned());
                 let cur = current_file.clone();
-                return self.resolve_path(&cur, &combined, visited).extend_with(steps);
+                return self
+                    .resolve_path(&cur, &combined, visited)
+                    .extend_with(steps);
             }
             // (3) use
             if let Some(u) = idx.uses.get(&seg).cloned() {
                 steps.push(Step {
                     kind: "use".into(),
                     file: self.display_path(&current_file),
-                    line: 0, name: seg.clone(),
+                    line: 0,
+                    name: seg.clone(),
                     detail: format!("use {}", u.join("::")),
                 });
                 let mut combined = u;
                 combined.extend(path[i + 1..].iter().cloned());
                 let cur = current_file.clone();
-                return self.resolve_path(&cur, &combined, visited).extend_with(steps);
+                return self
+                    .resolve_path(&cur, &combined, visited)
+                    .extend_with(steps);
             }
             // (4) glob use — try each
-            let mut tried = false;
             for gp in idx.glob_uses.clone() {
-                tried = true;
                 let mut try_path = gp.clone();
                 try_path.push(seg.clone());
                 try_path.extend(path[i + 1..].iter().cloned());
@@ -1151,26 +1395,44 @@ impl Resolver {
                     return r.extend_with(steps);
                 }
             }
-            let _ = tried;
             steps.push(Step {
                 kind: "unresolved".into(),
                 file: self.display_path(&current_file),
-                line: 0, name: seg.clone(),
+                line: 0,
+                name: seg.clone(),
                 detail: format!("`{}` not found in module", seg),
             });
-            return ResolveResult { kind: "unresolved".into(), steps, reason: "not found".into() };
+            return ResolveResult {
+                kind: "unresolved".into(),
+                steps,
+                reason: "not found".into(),
+            };
         }
-        ResolveResult { kind: "unresolved".into(), steps, reason: "empty after walk".into() }
+        ResolveResult {
+            kind: "unresolved".into(),
+            steps,
+            reason: "empty after walk".into(),
+        }
     }
 
     /// Map a file back to its module path within its crate.
     fn module_path_for_file(&self, crate_info: &CrateInfo, file: &Path) -> Vec<String> {
         let abs = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
-        let root_dir = crate_info.root_file.parent().unwrap_or(&crate_info.crate_dir);
-        let rel = match abs.strip_prefix(root_dir) { Ok(r) => r, Err(_) => return vec![] };
-        let mut comps: Vec<String> = rel.components()
-            .map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
-        if comps.is_empty() { return vec![]; }
+        let root_dir = crate_info
+            .root_file
+            .parent()
+            .unwrap_or(&crate_info.crate_dir);
+        let rel = match abs.strip_prefix(root_dir) {
+            Ok(r) => r,
+            Err(_) => return vec![],
+        };
+        let mut comps: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        if comps.is_empty() {
+            return vec![];
+        }
         // Map terminal file part
         let last = comps.pop().unwrap();
         let last_stem = last.strip_suffix(".rs").unwrap_or(&last).to_string();
@@ -1187,29 +1449,48 @@ impl Resolver {
         type_name: &str,
         method: &str,
         mut steps: Vec<Step>,
-        visited: &mut BTreeSet<(PathBuf, String)>,
     ) -> ResolveResult {
-        let key = type_def_file.canonicalize().unwrap_or_else(|_| type_def_file.to_path_buf());
+        let key = type_def_file
+            .canonicalize()
+            .unwrap_or_else(|_| type_def_file.to_path_buf());
         if self.index_file(type_def_file).is_err() {
-            return ResolveResult { kind: "parse-error".into(), steps, reason: "parse failed".into() };
+            return ResolveResult {
+                kind: "parse-error".into(),
+                steps,
+                reason: "parse failed".into(),
+            };
         }
         let impls = self.impls_by_file.get(&key).cloned().unwrap_or_default();
         // Search inherent impls first
-        for im in impls.iter().filter(|i| i.type_name == type_name && i.trait_name.is_none()) {
+        for im in impls
+            .iter()
+            .filter(|i| i.type_name == type_name && i.trait_name.is_none())
+        {
             if let Some((line, sig)) = im.methods.get(method) {
                 steps.push(Step {
                     kind: "impl-method".into(),
                     file: self.display_path(type_def_file),
                     line: *line,
                     name: method.into(),
-                    detail: format!("impl {} {{ fn {}{} }}", type_name, method,
-                        sig.strip_prefix(&format!("fn {method}")).unwrap_or("")),
+                    detail: format!(
+                        "impl {} {{ fn {}{} }}",
+                        type_name,
+                        method,
+                        sig.strip_prefix(&format!("fn {method}")).unwrap_or("")
+                    ),
                 });
-                return ResolveResult { kind: "impl-method".into(), steps, reason: String::new() };
+                return ResolveResult {
+                    kind: "impl-method".into(),
+                    steps,
+                    reason: String::new(),
+                };
             }
         }
         // Then trait impls
-        for im in impls.iter().filter(|i| i.type_name == type_name && i.trait_name.is_some()) {
+        for im in impls
+            .iter()
+            .filter(|i| i.type_name == type_name && i.trait_name.is_some())
+        {
             if let Some((line, sig)) = im.methods.get(method) {
                 let tn = im.trait_name.clone().unwrap_or_default();
                 steps.push(Step {
@@ -1217,28 +1498,52 @@ impl Resolver {
                     file: self.display_path(type_def_file),
                     line: *line,
                     name: method.into(),
-                    detail: format!("impl {} for {} {{ fn {}{} }}", tn, type_name, method,
-                        sig.strip_prefix(&format!("fn {method}")).unwrap_or("")),
+                    detail: format!(
+                        "impl {} for {} {{ fn {}{} }}",
+                        tn,
+                        type_name,
+                        method,
+                        sig.strip_prefix(&format!("fn {method}")).unwrap_or("")
+                    ),
                 });
-                return ResolveResult { kind: "trait-method".into(), steps, reason: String::new() };
+                return ResolveResult {
+                    kind: "trait-method".into(),
+                    steps,
+                    reason: String::new(),
+                };
             }
         }
         // Not found in same file; also search throughout known indexed files for `impl <Type>`
         // (rare but useful for orphan-impl patterns within the same crate).
         let candidate_files: Vec<PathBuf> = self.impls_by_file.keys().cloned().collect();
         for f in candidate_files {
-            if f == key { continue; }
+            if f == key {
+                continue;
+            }
             let impls = self.impls_by_file.get(&f).cloned().unwrap_or_default();
             for im in impls.iter().filter(|i| i.type_name == type_name) {
                 if let Some((line, sig)) = im.methods.get(method) {
-                    let kind = if im.trait_name.is_some() { "trait-method" } else { "impl-method" };
+                    let kind = if im.trait_name.is_some() {
+                        "trait-method"
+                    } else {
+                        "impl-method"
+                    };
                     let tn = im.trait_name.clone().unwrap_or_default();
                     let detail = if tn.is_empty() {
-                        format!("impl {} {{ fn {}{} }}", type_name, method,
-                            sig.strip_prefix(&format!("fn {method}")).unwrap_or(""))
+                        format!(
+                            "impl {} {{ fn {}{} }}",
+                            type_name,
+                            method,
+                            sig.strip_prefix(&format!("fn {method}")).unwrap_or("")
+                        )
                     } else {
-                        format!("impl {} for {} {{ fn {}{} }}", tn, type_name, method,
-                            sig.strip_prefix(&format!("fn {method}")).unwrap_or(""))
+                        format!(
+                            "impl {} for {} {{ fn {}{} }}",
+                            tn,
+                            type_name,
+                            method,
+                            sig.strip_prefix(&format!("fn {method}")).unwrap_or("")
+                        )
                     };
                     steps.push(Step {
                         kind: kind.into(),
@@ -1247,7 +1552,11 @@ impl Resolver {
                         name: method.into(),
                         detail,
                     });
-                    return ResolveResult { kind: kind.into(), steps, reason: String::new() };
+                    return ResolveResult {
+                        kind: kind.into(),
+                        steps,
+                        reason: String::new(),
+                    };
                 }
             }
         }
@@ -1256,10 +1565,16 @@ impl Resolver {
             file: self.display_path(type_def_file),
             line: 0,
             name: method.into(),
-            detail: format!("method `{}` not found in any impl of `{}`", method, type_name),
+            detail: format!(
+                "method `{}` not found in any impl of `{}`",
+                method, type_name
+            ),
         });
-        let _ = visited;
-        ResolveResult { kind: "unresolved".into(), steps, reason: "method not found".into() }
+        ResolveResult {
+            kind: "unresolved".into(),
+            steps,
+            reason: "method not found".into(),
+        }
     }
 }
 
@@ -1286,7 +1601,6 @@ impl ResolveResult {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Find enclosing item (fn/method) at a line
 
 #[derive(Debug, Clone, Serialize)]
@@ -1309,7 +1623,9 @@ fn find_enclosing_item(file: &syn::File, line: usize) -> Option<EnclosingItem> {
                 body_start: f.block.span().start().line,
                 body_end: f.block.span().end().line,
             })
-        } else { None }
+        } else {
+            None
+        }
     }
     fn check_impl_fn(f: &syn::ImplItemFn, ty_name: &str, line: usize) -> Option<EnclosingItem> {
         let s = f.span();
@@ -1321,7 +1637,9 @@ fn find_enclosing_item(file: &syn::File, line: usize) -> Option<EnclosingItem> {
                 body_start: f.block.span().start().line,
                 body_end: f.block.span().end().line,
             })
-        } else { None }
+        } else {
+            None
+        }
     }
     let mut best: Option<EnclosingItem> = None;
     fn smaller(a: &EnclosingItem, b: &EnclosingItem) -> bool {
@@ -1367,7 +1685,6 @@ fn find_enclosing_item(file: &syn::File, line: usize) -> Option<EnclosingItem> {
     best
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Payload
 
 #[derive(Debug, Serialize)]
@@ -1409,18 +1726,23 @@ struct Payload {
     notes: Vec<String>,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Driver
 
 fn run(args: Args) -> Result<String, String> {
-    let file_abs = args.file.canonicalize().map_err(|e| format!("file not found: {e}"))?;
+    let file_abs = args
+        .file
+        .canonicalize()
+        .map_err(|e| format!("file not found: {e}"))?;
     let project_root = find_project_root(&file_abs, args.project_root.as_deref());
     let project_root = project_root.canonicalize().unwrap_or(project_root);
     let crates = discover_crates(&project_root);
-    let crate_for_file = crates.iter().find(|c| {
-        let root_dir = c.root_file.parent().unwrap_or(&c.crate_dir);
-        file_abs.starts_with(root_dir)
-    }).cloned();
+    let crate_for_file = crates
+        .iter()
+        .find(|c| {
+            let root_dir = c.root_file.parent().unwrap_or(&c.crate_dir);
+            file_abs.starts_with(root_dir)
+        })
+        .cloned();
 
     let mut resolver = Resolver::new(project_root.clone(), crates.clone());
     resolver.index_file(&file_abs)?;
@@ -1430,7 +1752,9 @@ fn run(args: Args) -> Result<String, String> {
     let enclosing = find_enclosing_item(&parsed, args.range.0);
 
     // Source lines slice
-    let source_lines: Vec<(usize, String)> = src.lines().enumerate()
+    let source_lines: Vec<(usize, String)> = src
+        .lines()
+        .enumerate()
         .filter(|(i, _)| {
             let ln = i + 1;
             ln >= args.range.0 && ln <= args.range.1
@@ -1439,7 +1763,10 @@ fn run(args: Args) -> Result<String, String> {
         .collect();
 
     // Collect references in range
-    let mut rc = ReferenceCollector { range: args.range, refs: vec![] };
+    let mut rc = ReferenceCollector {
+        range: args.range,
+        refs: vec![],
+    };
     rc.visit_file(&parsed);
 
     // Collect local bindings + invariants by walking enclosing item only
@@ -1457,16 +1784,24 @@ fn run(args: Args) -> Result<String, String> {
         }
         impl<'ast, 'a> Visit<'ast> for Locate<'a> {
             fn visit_item_fn(&mut self, n: &'ast syn::ItemFn) {
-                if n.sig.ident == self.target.name.as_str() && n.span().start().line == self.target.line {
+                if n.sig.ident == self.target.name.as_str()
+                    && n.span().start().line == self.target.line
+                {
                     for input in &n.sig.inputs {
                         if let syn::FnArg::Typed(pt) = input {
                             let mut new_bindings = Vec::new();
                             collect_pat_bindings(&pt.pat, Some(&pt.ty), &mut new_bindings, "param");
                             for b in &mut new_bindings {
                                 b.detail = format!("param of `{}`", self.target.name);
-                                self.collector.invariants.type_annotations.push((b.line, format!("param {}: {}", b.name, pretty_type(&pt.ty))));
+                                self.collector.invariants.type_annotations.push((
+                                    b.line,
+                                    format!("param {}: {}", b.name, pretty_type(&pt.ty)),
+                                ));
                                 if b.is_mut {
-                                    self.collector.invariants.mut_bindings.push((b.line, format!("mut param `{}`", b.name)));
+                                    self.collector
+                                        .invariants
+                                        .mut_bindings
+                                        .push((b.line, format!("mut param `{}`", b.name)));
                                 }
                             }
                             self.collector.bindings.extend(new_bindings);
@@ -1474,31 +1809,50 @@ fn run(args: Args) -> Result<String, String> {
                             let line = r.span().start().line;
                             self.collector.bindings.push(Binding {
                                 name: "self".into(),
-                                kind: "param".into(), line,
+                                kind: "param".into(),
+                                line,
                                 detail: "self receiver".into(),
-                                annotation: r.colon_token.is_some()
-                                    .then(|| pretty_type(&r.ty)),
+                                annotation: r.colon_token.is_some().then(|| pretty_type(&r.ty)),
                                 is_mut: r.mutability.is_some(),
-                                use_path: None,
                             });
                         }
                     }
                     // return type
                     if let syn::ReturnType::Type(_, ty) = &n.sig.output {
-                        self.collector.invariants.type_annotations.push((n.sig.span().start().line, format!("return of `{}`: {}", self.target.name, pretty_type(ty))));
+                        self.collector.invariants.type_annotations.push((
+                            n.sig.span().start().line,
+                            format!("return of `{}`: {}", self.target.name, pretty_type(ty)),
+                        ));
                     }
                     // lifetimes
-                    if n.sig.generics.params.iter().any(|p| matches!(p, syn::GenericParam::Lifetime(_))) {
-                        self.collector.invariants.lifetimes.push((n.sig.span().start().line,
-                            format!("fn `{}` has lifetime params", self.target.name)));
+                    if n.sig
+                        .generics
+                        .params
+                        .iter()
+                        .any(|p| matches!(p, syn::GenericParam::Lifetime(_)))
+                    {
+                        self.collector.invariants.lifetimes.push((
+                            n.sig.span().start().line,
+                            format!("fn `{}` has lifetime params", self.target.name),
+                        ));
                     }
                     // attrs
                     for a in &n.attrs {
-                        let s = quote::quote!(#a).to_string().split_whitespace().collect::<Vec<_>>().join(" ");
+                        let s = quote::quote!(#a)
+                            .to_string()
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         if a.path().is_ident("cfg") || a.path().is_ident("cfg_attr") {
-                            self.collector.invariants.cfg_gates.push((n.sig.span().start().line, s));
+                            self.collector
+                                .invariants
+                                .cfg_gates
+                                .push((n.sig.span().start().line, s));
                         } else {
-                            self.collector.invariants.attribute_macros.push((n.sig.span().start().line, s));
+                            self.collector
+                                .invariants
+                                .attribute_macros
+                                .push((n.sig.span().start().line, s));
                         }
                     }
                     syn::visit::visit_block(self.collector, &n.block);
@@ -1517,24 +1871,35 @@ fn run(args: Args) -> Result<String, String> {
                             collect_pat_bindings(&pt.pat, Some(&pt.ty), &mut new_bindings, "param");
                             for b in &mut new_bindings {
                                 b.detail = format!("param of `{}`", self.target.name);
-                                self.collector.invariants.type_annotations.push((b.line, format!("param {}: {}", b.name, pretty_type(&pt.ty))));
-                                if b.is_mut { self.collector.invariants.mut_bindings.push((b.line, format!("mut param `{}`", b.name))); }
+                                self.collector.invariants.type_annotations.push((
+                                    b.line,
+                                    format!("param {}: {}", b.name, pretty_type(&pt.ty)),
+                                ));
+                                if b.is_mut {
+                                    self.collector
+                                        .invariants
+                                        .mut_bindings
+                                        .push((b.line, format!("mut param `{}`", b.name)));
+                                }
                             }
                             self.collector.bindings.extend(new_bindings);
                         } else if let syn::FnArg::Receiver(r) = input {
                             let line = r.span().start().line;
                             self.collector.bindings.push(Binding {
-                                name: "self".into(), kind: "param".into(), line,
+                                name: "self".into(),
+                                kind: "param".into(),
+                                line,
                                 detail: "self receiver".into(),
                                 annotation: None,
                                 is_mut: r.mutability.is_some(),
-                                use_path: None,
                             });
                         }
                     }
                     if let syn::ReturnType::Type(_, ty) = &n.sig.output {
-                        self.collector.invariants.type_annotations.push((n.sig.span().start().line,
-                            format!("return of `{}`: {}", self.target.name, pretty_type(ty))));
+                        self.collector.invariants.type_annotations.push((
+                            n.sig.span().start().line,
+                            format!("return of `{}`: {}", self.target.name, pretty_type(ty)),
+                        ));
                     }
                     syn::visit::visit_block(self.collector, &n.block);
                 } else {
@@ -1542,7 +1907,10 @@ fn run(args: Args) -> Result<String, String> {
                 }
             }
         }
-        let mut loc = Locate { target: enc, collector: &mut scope };
+        let mut loc = Locate {
+            target: enc,
+            collector: &mut scope,
+        };
         loc.visit_file(&parsed);
     } else {
         // Top-level: walk whole file for invariants but no params
@@ -1557,11 +1925,20 @@ fn run(args: Args) -> Result<String, String> {
     let mut grouped: BTreeMap<(String, Vec<String>, bool), Vec<&Reference>> = BTreeMap::new();
     for r in &rc.refs {
         // skip method `name` themselves (we record receiver+method separately below)
-        if r.method_receiver.is_some() { continue; }
-        grouped.entry((r.name.clone(), r.full_path.clone(), r.is_call)).or_default().push(r);
+        if r.method_receiver.is_some() {
+            continue;
+        }
+        grouped
+            .entry((r.name.clone(), r.full_path.clone(), r.is_call))
+            .or_default()
+            .push(r);
     }
     let file_idx_key = file_abs.canonicalize().unwrap_or(file_abs.clone());
-    let file_idx = resolver.indices.get(&file_idx_key).cloned().unwrap_or_default();
+    let file_idx = resolver
+        .indices
+        .get(&file_idx_key)
+        .cloned()
+        .unwrap_or_default();
 
     // Resolve grouped names
     for ((name, full_path, is_call), refs) in &grouped {
@@ -1571,8 +1948,13 @@ fn run(args: Args) -> Result<String, String> {
         if let Some(b) = local {
             if !is_call {
                 variable_origins.push(VarReport {
-                    name: name.clone(), uses,
-                    origin: vec![OriginEntry { line: b.line, kind: b.kind.clone(), detail: b.detail.clone() }],
+                    name: name.clone(),
+                    uses,
+                    origin: vec![OriginEntry {
+                        line: b.line,
+                        kind: b.kind.clone(),
+                        detail: b.detail.clone(),
+                    }],
                     chain: vec![Step {
                         kind: format!("binding-{}", b.kind),
                         file: resolver.display_path(&file_abs),
@@ -1612,9 +1994,8 @@ fn run(args: Args) -> Result<String, String> {
                     detail: format!("use {}", u.join("::")),
                 });
                 path_to_resolve = u;
-            } else if let Some(_it) = file_idx.items.get(name) {
+            } else if let Some(it) = file_idx.items.get(name).cloned() {
                 // defined in this file
-                let it = file_idx.items.get(name).unwrap().clone();
                 chain.push(Step {
                     kind: format!("{}-def", it.kind),
                     file: resolver.display_path(&file_abs),
@@ -1624,14 +2005,23 @@ fn run(args: Args) -> Result<String, String> {
                 });
                 if *is_call {
                     call_bindings.push(CallReport {
-                        callee: name.clone(), line: refs[0].line,
-                        chain, kind: format!("{}-call", it.kind),
+                        callee: name.clone(),
+                        line: refs[0].line,
+                        chain,
+                        kind: format!("{}-call", it.kind),
                     });
                 } else {
                     variable_origins.push(VarReport {
-                        name: name.clone(), uses,
-                        origin: vec![OriginEntry { line: it.line, kind: it.kind.clone(), detail: format!("{} `{}`", it.kind, it.name) }],
-                        chain, annotation: None, resolution: "module".into(),
+                        name: name.clone(),
+                        uses,
+                        origin: vec![OriginEntry {
+                            line: it.line,
+                            kind: it.kind.clone(),
+                            detail: format!("{} `{}`", it.kind, it.name),
+                        }],
+                        chain,
+                        annotation: None,
+                        resolution: "module".into(),
                     });
                 }
                 continue;
@@ -1641,15 +2031,25 @@ fn run(args: Args) -> Result<String, String> {
                     let chain = vec![Step {
                         kind: "std-prelude".into(),
                         file: "<std prelude>".into(),
-                        line: 0, name: name.clone(),
+                        line: 0,
+                        name: name.clone(),
                         detail: "item from Rust standard prelude".into(),
                     }];
                     if *is_call {
-                        call_bindings.push(CallReport { callee: name.clone(), line: refs[0].line, chain, kind: "std-prelude".into() });
+                        call_bindings.push(CallReport {
+                            callee: name.clone(),
+                            line: refs[0].line,
+                            chain,
+                            kind: "std-prelude".into(),
+                        });
                     } else {
                         variable_origins.push(VarReport {
-                            name: name.clone(), uses, origin: vec![],
-                            chain, annotation: None, resolution: "std-prelude".into(),
+                            name: name.clone(),
+                            uses,
+                            origin: vec![],
+                            chain,
+                            annotation: None,
+                            resolution: "std-prelude".into(),
                         });
                     }
                     continue;
@@ -1661,14 +2061,18 @@ fn run(args: Args) -> Result<String, String> {
                     let chain = r.steps;
                     if *is_call {
                         call_bindings.push(CallReport {
-                            callee: name.clone(), line: refs[0].line,
-                            chain, kind: "external-or-unresolved".into(),
+                            callee: name.clone(),
+                            line: refs[0].line,
+                            chain,
+                            kind: "external-or-unresolved".into(),
                         });
                     } else {
                         variable_origins.push(VarReport {
-                            name: name.clone(), uses,
+                            name: name.clone(),
+                            uses,
                             origin: vec![],
-                            chain, annotation: None,
+                            chain,
+                            annotation: None,
                             resolution: "external-or-unresolved".into(),
                         });
                     }
@@ -1677,13 +2081,19 @@ fn run(args: Args) -> Result<String, String> {
                     let chain = r.steps;
                     if *is_call {
                         call_bindings.push(CallReport {
-                            callee: name.clone(), line: refs[0].line,
-                            chain, kind: r.kind.clone(),
+                            callee: name.clone(),
+                            line: refs[0].line,
+                            chain,
+                            kind: r.kind.clone(),
                         });
                     } else {
                         variable_origins.push(VarReport {
-                            name: name.clone(), uses, origin: vec![],
-                            chain, annotation: None, resolution: r.kind.clone(),
+                            name: name.clone(),
+                            uses,
+                            origin: vec![],
+                            chain,
+                            annotation: None,
+                            resolution: r.kind.clone(),
                         });
                     }
                     continue;
@@ -1701,25 +2111,33 @@ fn run(args: Args) -> Result<String, String> {
             }
         }
         let r = resolver.resolve_path(&file_abs, &path_to_resolve, &mut visited);
-        for s in r.steps { chain.push(s); }
+        for s in r.steps {
+            chain.push(s);
+        }
         if *is_call {
             call_bindings.push(CallReport {
                 callee: full_path.join("::"),
                 line: refs[0].line,
-                chain, kind: r.kind.clone(),
+                chain,
+                kind: r.kind.clone(),
             });
         } else {
             variable_origins.push(VarReport {
-                name: name.clone(), uses, origin: vec![],
-                chain, annotation: None, resolution: r.kind.clone(),
+                name: name.clone(),
+                uses,
+                origin: vec![],
+                chain,
+                annotation: None,
+                resolution: r.kind.clone(),
             });
         }
     }
 
     // Method calls — resolve method on receiver's type if discoverable
     for r in &rc.refs {
-        if r.method_receiver.is_none() { continue; }
-        let recv = r.method_receiver.as_ref().unwrap();
+        let Some(recv) = r.method_receiver.as_ref() else {
+            continue;
+        };
         let method = r.method_name.clone().unwrap_or_default();
         let mut chain: Vec<Step> = vec![];
         // 1) find receiver binding
@@ -1730,13 +2148,17 @@ fn run(args: Args) -> Result<String, String> {
             chain.push(Step {
                 kind: format!("binding-{}", b.kind),
                 file: resolver.display_path(&file_abs),
-                line: b.line, name: b.name.clone(), detail: b.detail.clone(),
+                line: b.line,
+                name: b.name.clone(),
+                detail: b.detail.clone(),
             });
             // a) explicit annotation
             if let Some(ann) = &b.annotation {
                 // parse type's last segment as name
                 if let Ok(ty) = syn::parse_str::<syn::Type>(ann) {
-                    if let Some(tn) = type_path_last(&ty) { type_name = Some(tn); }
+                    if let Some(tn) = type_path_last(&ty) {
+                        type_name = Some(tn);
+                    }
                 }
             }
             // b) detail like "let x = T::new(...)" or "let x = T { ... }"
@@ -1744,9 +2166,12 @@ fn run(args: Args) -> Result<String, String> {
                 // crude heuristic on detail
                 let det = &b.detail;
                 if let Some(eq) = det.find('=') {
-                    let rhs = det[eq+1..].trim();
+                    let rhs = det[eq + 1..].trim();
                     // T::new(...) or T(...)
-                    let first_tok: String = rhs.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+                    let first_tok: String = rhs
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                        .collect();
                     let head = first_tok.split("::").next().unwrap_or("").to_string();
                     if !head.is_empty() && head.chars().next().map_or(false, |c| c.is_uppercase()) {
                         type_name = Some(head);
@@ -1757,43 +2182,76 @@ fn run(args: Args) -> Result<String, String> {
             if let Some(tn) = &type_name {
                 let mut visited = BTreeSet::new();
                 let mut path = vec![tn.clone()];
-                if let Some(u) = file_idx.uses.get(tn).cloned() { path = u; }
+                if let Some(u) = file_idx.uses.get(tn).cloned() {
+                    path = u;
+                }
                 let rr = resolver.resolve_path(&file_abs, &path, &mut visited);
                 // Update type_name to the actual resolved type (e.g. alias `Service` -> `UserService`)
                 for s in &rr.steps {
-                    if s.kind.ends_with("-def") && s.line > 0
-                       && matches!(s.kind.as_str(), "struct-def" | "enum-def" | "trait-def" | "type-alias-def")
+                    if s.kind.ends_with("-def")
+                        && s.line > 0
+                        && matches!(
+                            s.kind.as_str(),
+                            "struct-def" | "enum-def" | "trait-def" | "type-alias-def"
+                        )
                     {
                         type_name = Some(s.name.clone());
-                        type_def_file = Some(resolver.project_root.join(s.file.replace('/', std::path::MAIN_SEPARATOR_STR)));
+                        type_def_file = Some(
+                            resolver
+                                .project_root
+                                .join(s.file.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                        );
                     }
                 }
-                for s in rr.steps { chain.push(s); }
+                for s in rr.steps {
+                    chain.push(s);
+                }
             }
         }
         // 2) lookup method on type
         let mut kind = "unresolved-method".to_string();
         if let (Some(tdf), Some(tn)) = (type_def_file.clone(), type_name.clone()) {
             if tdf.is_file() {
-                let mut visited = BTreeSet::new();
-                let mr = resolver.resolve_method_on_type(&tdf, &tn, &method, vec![], &mut visited);
+                let mr = resolver.resolve_method_on_type(&tdf, &tn, &method, vec![]);
                 kind = mr.kind.clone();
-                for s in mr.steps { chain.push(s); }
+                for s in mr.steps {
+                    chain.push(s);
+                }
             }
         }
         // If we couldn't resolve a type, still report the call with what we have
         call_bindings.push(CallReport {
             callee: format!("{}.{}", recv.name, method),
-            line: r.line, chain, kind,
+            line: r.line,
+            chain,
+            kind,
         });
     }
 
     // Walk full file for `mod` decls' lifetimes/cfg/attrs at item level near range
     let mut notes: Vec<String> = vec![];
     if let Some(c) = &crate_for_file {
-        scope.invariants.lifetimes.extend(file_idx.lifetimes.iter().filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1).cloned());
-        scope.invariants.cfg_gates.extend(file_idx.cfgs.iter().filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1).cloned());
-        scope.invariants.attribute_macros.extend(file_idx.attr_macros.iter().filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1).cloned());
+        scope.invariants.lifetimes.extend(
+            file_idx
+                .lifetimes
+                .iter()
+                .filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1)
+                .cloned(),
+        );
+        scope.invariants.cfg_gates.extend(
+            file_idx
+                .cfgs
+                .iter()
+                .filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1)
+                .cloned(),
+        );
+        scope.invariants.attribute_macros.extend(
+            file_idx
+                .attr_macros
+                .iter()
+                .filter(|(l, _)| *l >= args.range.0 && *l <= args.range.1)
+                .cloned(),
+        );
         notes.push(format!("crate: `{}`", c.name));
     } else {
         notes.push("file not inside a known crate; resolution limited to single-file".into());
@@ -1819,20 +2277,31 @@ fn run(args: Args) -> Result<String, String> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Markdown rendering
 
 fn render_markdown(p: &Payload) -> String {
     let mut o = String::new();
-    let push = |o: &mut String, s: &str| { o.push_str(s); o.push('\n'); };
-    push(&mut o, &format!("# Trace: {}:L{}-L{} (Rust)", p.file, p.range.0, p.range.1));
+    let push = |o: &mut String, s: &str| {
+        o.push_str(s);
+        o.push('\n');
+    };
+    push(
+        &mut o,
+        &format!("# Trace: {}:L{}-L{} (Rust)", p.file, p.range.0, p.range.1),
+    );
     push(&mut o, "");
     push(&mut o, &format!("> Project root: `{}`", p.project_root));
     if let Some(cn) = &p.crate_name {
         push(&mut o, &format!("> Crate: `{}`", cn));
     }
     if let Some(enc) = &p.enclosing {
-        push(&mut o, &format!("> Enclosing: {} `{}` (L{}-L{})", enc.kind, enc.name, enc.body_start, enc.body_end));
+        push(
+            &mut o,
+            &format!(
+                "> Enclosing: {} `{}` (L{}-L{})",
+                enc.kind, enc.name, enc.body_start, enc.body_end
+            ),
+        );
     }
     push(&mut o, "");
     push(&mut o, "## Source");
@@ -1848,11 +2317,19 @@ fn render_markdown(p: &Payload) -> String {
         push(&mut o, "## Variable origins");
         push(&mut o, "");
         for v in &p.variable_origins {
-            let uses = v.uses.iter().map(|u| format!("L{u}")).collect::<Vec<_>>().join(", ");
+            let uses = v
+                .uses
+                .iter()
+                .map(|u| format!("L{u}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             push(&mut o, &format!("- `{}` — used at {}", v.name, uses));
             push(&mut o, &format!("  - resolution: {}", v.resolution));
             if let Some(o2) = v.origin.first() {
-                push(&mut o, &format!("  - origin: L{} ({}) — `{}`", o2.line, o2.kind, o2.detail));
+                push(
+                    &mut o,
+                    &format!("  - origin: L{} ({}) — `{}`", o2.line, o2.kind, o2.detail),
+                );
             }
             if let Some(ann) = &v.annotation {
                 push(&mut o, &format!("  - annotation: `{}`", ann));
@@ -1869,15 +2346,20 @@ fn render_markdown(p: &Payload) -> String {
         push(&mut o, "## Call bindings");
         push(&mut o, "");
         for c in &p.call_bindings {
-            push(&mut o, &format!("- `{}(...)` at L{} — {}", c.callee, c.line, c.kind));
+            push(
+                &mut o,
+                &format!("- `{}(...)` at L{} — {}", c.callee, c.line, c.kind),
+            );
             render_chain(&mut o, &c.chain);
         }
         push(&mut o, "");
     }
 
     let inv = &p.invariants;
-    let mut section = |title: &str, items: &[(usize, String)], o: &mut String| {
-        if items.is_empty() { return; }
+    let section = |title: &str, items: &[(usize, String)], o: &mut String| {
+        if items.is_empty() {
+            return;
+        }
         o.push_str("## ");
         o.push_str(title);
         o.push('\n');
@@ -1899,7 +2381,9 @@ fn render_markdown(p: &Payload) -> String {
 
     if !p.notes.is_empty() {
         o.push_str("## Notes\n\n");
-        for n in &p.notes { o.push_str(&format!("- {}\n", n)); }
+        for n in &p.notes {
+            o.push_str(&format!("- {}\n", n));
+        }
     }
     o
 }
@@ -1908,27 +2392,37 @@ fn render_chain(o: &mut String, chain: &[Step]) {
     for (i, s) in chain.iter().enumerate() {
         let arrow = if i == 0 { "    -" } else { "    →" };
         if s.line > 0 {
-            o.push_str(&format!("{} `{}` ({}) at {}:L{} — {}\n",
-                arrow, s.name, s.kind, s.file, s.line, s.detail));
+            o.push_str(&format!(
+                "{} `{}` ({}) at {}:L{} — {}\n",
+                arrow, s.name, s.kind, s.file, s.line, s.detail
+            ));
         } else {
-            o.push_str(&format!("{} `{}` ({}) at {} — {}\n",
-                arrow, s.name, s.kind, s.file, s.detail));
+            o.push_str(&format!(
+                "{} `{}` ({}) at {} — {}\n",
+                arrow, s.name, s.kind, s.file, s.detail
+            ));
         }
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
-            if !e.is_empty() { eprintln!("error: {e}"); }
+            if !e.is_empty() {
+                eprintln!("error: {e}");
+            }
             return ExitCode::from(2);
         }
     };
     match run(args) {
-        Ok(out) => { print!("{out}"); ExitCode::SUCCESS }
-        Err(e) => { eprintln!("error: {e}"); ExitCode::from(1) }
+        Ok(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(1)
+        }
     }
 }
