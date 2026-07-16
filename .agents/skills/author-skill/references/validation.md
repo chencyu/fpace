@@ -1,32 +1,7 @@
 # Validation
 
-Verify that a skill's SKILL.md conforms to the Agent Skills specification.
+Run `skills-ref validate <skill-directory>`: exit 0 means valid; exit 1 prints errors to stderr. It checks `SKILL.md` existence, YAML parsing, required `name`/`description`, and only these frontmatter fields: `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility`. `name` is lowercase alphanumeric plus hyphens, at most 64 characters, with no edge/consecutive hyphens, and matches the directory; `description` is nonempty and at most 1024 characters.
 
-## CLI — `skills-ref validate`
+Other commands: `skills-ref read-properties <path>` emits frontmatter JSON; `skills-ref to-prompt <path> [<path> ...]` emits `<available_skills>` XML. The package is under `references/agentskills/skills-ref/`; for wrapper invocation, follow `platform-detection.md` and `scripts/validate-cli`.
 
-Primary format validator. Checks:
-- SKILL.md exists
-- YAML frontmatter parses correctly
-- Required fields present (`name`, `description`)
-- `name`: lowercase, no leading/trailing hyphens, no consecutive hyphens, alphanumeric + hyphens only, max 64 chars, must match directory name
-- `description`: non-empty, max 1024 chars
-- No unexpected frontmatter fields (only `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility` allowed)
-
-```
-skills-ref validate <path-to-skill-directory>
-```
-
-Exit code `0` = valid, `1` = errors (printed to stderr).
-
-Additional subcommands:
-- `skills-ref read-properties <path>` — JSON dump of parsed frontmatter
-- `skills-ref to-prompt <path> [<path> ...]` — generate `<available_skills>` XML block
-
-The `skills-ref` package lives in `references/agentskills/skills-ref/`. For script-based invocation → see [platform-detection.md](./platform-detection.md) and `scripts/validate-cli`.
-
-## VS Code — diagnostics & discovery
-
-VS Code may surface frontmatter or format issues as diagnostics (warnings/errors). Two approaches:
-
-1. **Diagnostics check**: use `get_errors` on the SKILL.md file (or its parent skill directory). If diagnostics appear for files under skill-related paths (`.agents/skills/`, `.github/skills/`, etc.), inspect the reported messages for format violations.
-2. **Debug logs**: if no diagnostics but skill still missing → gear icon in Chat view → `Show Agent Debug Logs` to see parsing errors.
+Also inspect VS Code diagnostics on the `SKILL.md` or skill directory. If discovery still fails without diagnostics, open Chat's gear menu → `Show Agent Debug Logs` and inspect parser errors.
