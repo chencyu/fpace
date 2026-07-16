@@ -25,9 +25,7 @@ from dataclasses import dataclass
 from catalog import CATALOG, TAG_CATEGORIES, Algorithm, Tag
 
 
-# ═══════════════════════════════════════════════════════════════════
 # Public API
-# ═══════════════════════════════════════════════════════════════════
 
 @dataclass(frozen=True, slots=True)
 class MatchResult:
@@ -82,9 +80,7 @@ def resolve_tags(names: list[str]) -> set[Tag]:
     return resolved
 
 
-# ═══════════════════════════════════════════════════════════════════
 # CLI
-# ═══════════════════════════════════════════════════════════════════
 
 def _print_tags() -> None:
     for category, tags in TAG_CATEGORIES.items():
