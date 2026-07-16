@@ -31,7 +31,7 @@ The surface vocabulary differs — doctrine, case formulation, unification, tast
 
 The skills do not tell the model what to do. They supply a framework of judgment it would not have by default.
 
-The skill for thinking does not say "follow these steps." It encodes the move — find the representational constraints, dissolve them, name the generating core from which the answer follows. The skill for analysis does not prescribe a method. It encodes how an expert looks at a claim: which pieces are load-bearing, which are scaffolding, where a reframing would retire half the argument. The skill for design does not describe patterns. It encodes the judgment that the shape of the object decides the shape of the work done on it — and that the shape is chosen before the work begins.
+The skill for thinking does not say "follow these steps." It encodes the move — observe the thing from every angle, extract the law that generates what it shows, restate the problem so the old difficulty cannot arise. The skill for analysis does not prescribe a method. It encodes how an expert looks at a claim: which pieces are load-bearing, which are scaffolding, where a reframing would retire half the argument. The skill for design does not describe patterns. It encodes the judgment that the shape of the object decides the shape of the work done on it — and that the shape is chosen before the work begins.
 
 Rules are followed. Frameworks are internalized. A model following a rule stops when the rule runs out. A model reasoning from a framework continues reasoning — because the framework is about how to *see*, and seeing does not run out.
 
