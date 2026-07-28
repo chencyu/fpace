@@ -8,6 +8,7 @@ user-invocable: false
 
 Shape history for its future reader, not its author.
 
+- The diff carries only what changed. Before writing the message, recover the why from the session: the request or symptom that started the work, the constraints and corrections the user imposed, and the approaches abandoned. Reconcile that account against the staged diff — a claim absent from the diff is misattributed; a staged change the account does not explain belongs in another commit.
 - One commit is one independently understandable, reviewable, and revertible logical change; exclude “while here” cleanup.
 - Every commit leaves the tree buildable, runnable, and testable. Never commit WIP or depend on a later commit to repair it; restructure the split instead.
 - Subject: imperative; `subsystem: description`; no period; target 50 characters, never exceed 72; make `git log --oneline` informative.
