@@ -1,6 +1,6 @@
 ---
 name: git-commit
-description: "Must load when writing, reviewing, or improving any git commit message, staging changes, or deciding how to split commits. Do not write commit messages without this skill."
+description: "Must load before writing a git commit message, staging changes, or splitting commits. Do not write commit messages without this skill."
 user-invocable: false
 ---
 

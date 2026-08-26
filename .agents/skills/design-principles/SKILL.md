@@ -1,6 +1,6 @@
 ---
 name: design-principles
-description: "Must load before designing any system, component, or data model — code architecture, data schemas, research methodology, or analysis frameworks. Do not produce or evaluate designs without this skill."
+description: "Must load before designing any system, component, schema, or data model. Do not produce or evaluate designs without this skill."
 user-invocable: false
 ---
 

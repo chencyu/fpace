@@ -1,6 +1,6 @@
 ---
 name: thinking-principles
-description: "Must load before thinking, reasoning, or making judgments about any problem — technical, analytical, or design. Do not produce or evaluate reasoning without this skill."
+description: "Must load before thinking, reasoning, or judging any problem. Do not produce or evaluate reasoning without this skill."
 user-invocable: false
 ---
 

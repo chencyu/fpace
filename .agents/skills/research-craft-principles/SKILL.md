@@ -1,6 +1,6 @@
 ---
 name: research-craft-principles
-description: "Must load when conducting research, writing analysis, building arguments, structuring reports, or designing experiments — literature reviews, analytical writing, and knowledge synthesis. Do not produce research or analytical work without this skill."
+description: "Must load before conducting research, writing analysis, or designing experiments. Do not produce research or analytical work without this skill."
 user-invocable: false
 ---
 

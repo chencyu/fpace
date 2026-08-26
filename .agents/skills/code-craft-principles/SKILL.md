@@ -1,6 +1,6 @@
 ---
 name: code-craft-principles
-description: "Must load whenever writing, reviewing, or refactoring any code — new features, bug fixes, code review, or any implementation task. Do not produce or evaluate code without this skill."
+description: "Must load before writing, reviewing, or refactoring any code. Do not produce or evaluate code without this skill."
 user-invocable: false
 ---
 
