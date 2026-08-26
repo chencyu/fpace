@@ -17,21 +17,6 @@ Run:
 - `--project-root`: override upward discovery by `pyproject.toml`, `setup.py`, `setup.cfg`, `Pipfile`, `requirements.txt`, `Cargo.toml`, `.git`, or `.hg`.
 - `--json`: use only for a tool caller; default Markdown omits empty sections.
 
-## Output
-
-1. **Source:** fenced, numbered queried lines.
-2. **Variable origins:** every loaded `Name`; initial binding, all reassignments/aug-assigns, scope, annotation, and parameter owner; project-local import chains end at the definition.
-3. **Call bindings:** every `Call`, through imports, class construction, and attributes. Steps are `binding`, `module-file`, `instance`, `external`, `builtin`, `unresolved`, `star-import`, `cycle`, or `depth-limit`.
-4. **Implicit invariants:** enclosing context managers and try/catch/finally semantics; prior same-function asserts; enclosing-function decorators and their chains; variable/parameter/return annotations; auto-managed `with` resources, matched manual acquire/release, and unpaired-acquire hazards; mutable defaults, global writes, bare `except`, I/O-like calls, attribute mutations, and subscript writes.
-
-Resolution never leaves the project root. It follows project-local `import pkg.mod` calls, `from pkg.mod import X` including re-exports and cycles, `from pkg import submod`, class instances and methods including direct bases, and package-relative imports. It marks stdlib/third-party modules `external`, wildcard imports `star-import`, and does not follow dynamic attributes, `getattr`, or reflection.
-
-## Languages
-
-**Python:** stdlib `ast`, no external dependency. Limitations: a rebound object's first class binding wins; the earliest conditional import wins; inherited methods follow direct bases recursively with cycle protection but diamond order is best-effort rather than strict MRO; side-effect detection is name/AST-shape heuristic; Python 3.8+ is required for `ast.end_lineno`.
-
-**Rust:** `scripts/rust_tracer/` auto-builds once with `cargo build --release`; a Rust toolchain is required, MSRV 1.70+, tested through 1.94, using `syn` 2.x. It resolves `mod foo;` across `mod.rs`/`foo.rs`, lib/bin/workspace members; aliased `use`, `pub use`, `crate::`/`self::`/`super::`/sibling-crate paths; associated functions; inherent and trait impl methods. It reports `unsafe`, `?`, panic surfaces, mutable bindings, annotations, lifetimes, `cfg`, attribute macros, I/O macros, and mutating methods; standard prelude names are not unresolved. Limitations: no macro expansion; inline modules are indexed but not deeply file-walked; receivers without discoverable types become `unresolved-method`; workspace `crates/*` globs expand direct subfolders only; external crates are marked, not traversed.
-
-Other languages print `unsupported language for <file>` and exit 2. Detection is extension then shebang unless forced.
+Read `references/output.md` when interpreting a report section or judging how far resolution reached. Read `references/languages/<lang>.md` for toolchain requirements before a language's first run in a workspace, and for limitations whenever its results look wrong. An unsupported language prints `unsupported language for <file>` and exits 2.
 
 Do not paraphrase tracer output; cite its `L<n>` references in follow-ups.
