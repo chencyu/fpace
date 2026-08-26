@@ -15,7 +15,7 @@ Before anything else, read these in full:
 2. `references/agentskills/docs/skill-creation/best-practices.mdx`
 3. `references/agentskills/docs/skill-creation/optimizing-descriptions.mdx`
 
-Read `references/validation.md` when validating output and `references/platform-detection.md` when script paths vary by OS.
+Read `references/validation.md` when validating output, `references/distillation.md` when the source is a chat session or other work record, and `references/platform-detection.md` when script paths vary by OS.
 
 ## De-entropy
 
@@ -25,6 +25,7 @@ After drafting any tracked skill-related change, read `references/de-entropy.md`
 
 - **Description:** it is the always-visible classifier, not a summary. Use exactly `"Must load when/before [activity]. Do not [activity] without this skill."`: sentence one names a specific activity trigger; sentence two prohibits the same activity without the skill. No feature list, synonym coverage, soft "use when," or third sentence. Keep under 150 characters where possible.
 - **Body:** retain only content the agent would otherwise get wrong: non-inferable gotchas, non-obvious ordered procedure, and references with explicit read conditions.
+- **Abstraction:** a skill states the core mechanism that generates its domain, not the cases it was drawn from. Those cases are input observations for extraction. They do not appear as content in the skill. Run `skill: thinking-principles` over those observations. Write the smallest mechanism from which every observation re-derives. Wanting to append a guardrail is evidence the core is wrong. By default, revise the core until the guarded case needs no special handling. Keep a guardrail only when no revision of the core covers the case. A kept guardrail is temporary compensation for a current model limitation, and stops being justified as model capability grows. Correctness must rest on the core, never on the guardrail. Abstraction must not become vague generality. The core must still force specific behaviour. Include an example only when it disambiguates how to apply the core. An included example must be a minimal generic instance, not the specific incident that prompted it.
 - **Files:** a page carries only what its own step needs; specs, schemas, examples, and templates live under `references/`, `scripts/`, or `assets/`. Split out a child page exactly when you can state the condition for reading it, and cite it with that condition. Nest to any depth, overriding the spec's one-level-deep guidance — as a skill grows, `SKILL.md` and the upper layers reduce to an index plus core statement while the substance sits at the leaves.
 - **Length:** the spec's 500-line `SKILL.md` ceiling is the hard limit; strongly prefer under 50 lines for `SKILL.md` and every authored `.md` it reaches, splitting past that unless the page is one indivisible unit.
 
