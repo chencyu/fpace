@@ -18,4 +18,10 @@ Choose data structures before algorithms: put behavior where its data lives and 
 
 ## Cost
 
-Shape representation and layout for the dominant access pattern while naming the redundancy-versus-access trade-off. Add an abstraction only when a second concrete use simplifies actual work, never for hypothetical reuse.
+Shape representation and layout for the dominant access pattern while naming the redundancy-versus-access trade-off.
+
+## Scope
+
+Solve the requirement in front of you, not one development has not reached: an unreached requirement cannot be validated, and building for it fixes the design around a use that may never arrive. Add an abstraction only when a second concrete use simplifies actual work, never for hypothetical reuse. Narrow the problem to what is being solved now, then solve that completely.
+
+Restraint never licenses a worse solution. A clean structure and the right representation belong inside every scope, never to a later one; a branchy shortcut is unfinished work, not economy. Take the best solution the scope admits, preferring one a later requirement can extend over one that must be torn out. That preference is not a licence for hypothetical reuse: leave the seam, never build the mechanism behind it.
