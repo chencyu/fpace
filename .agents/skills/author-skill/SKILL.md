@@ -17,11 +17,9 @@ Before anything else, read these in full:
 
 Read `references/validation.md` when validating output, `references/distillation.md` when the source is a chat session or other work record, and `references/platform-detection.md` when script paths vary by OS.
 
-## De-entropy
-
-After drafting any tracked skill-related change, read `references/de-entropy.md` and apply its protocol before validation. This includes edits to author-skill, its references, and `De-Entropy Blind`.
-
 ## Authoring
+
+Before authoring, load `content-writing` and `content-de-entropy`. Apply their shared workflow to skill files, references, and agent instructions before validation.
 
 - **Description:** it is the always-visible classifier, not a summary. Use exactly `"Must load when/before [activity]. Do not [activity] without this skill."`: sentence one names a specific activity trigger; sentence two prohibits the same activity without the skill. No feature list, synonym coverage, soft "use when," or third sentence. Keep under 150 characters where possible.
 - **Body:** retain only content the agent would otherwise get wrong: non-inferable gotchas, non-obvious ordered procedure, and references with explicit read conditions.
